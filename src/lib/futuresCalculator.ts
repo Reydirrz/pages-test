@@ -88,3 +88,7 @@ export function calculateTargetExitPrice(input: TargetInput): number {
   if (target <= 0) throw new RangeError('Ese beneficio neto no es posible con un precio de salida positivo para SHORT.')
   return target
 }
+
+export function calculateBreakEvenExitPrice(input: Omit<TargetInput, 'desiredNetProfit'>): number {
+  return calculateTargetExitPrice({ ...input, desiredNetProfit: 0 })
+}

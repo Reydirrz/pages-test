@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { calculateTargetExitPrice, calculateTrade } from '../src/lib/futuresCalculator'
+import { calculateBreakEvenExitPrice, calculateTargetExitPrice, calculateTrade } from '../src/lib/futuresCalculator'
 import type { TradeInput } from '../src/types/trading'
 
 const base: TradeInput = { side: 'LONG', entryPrice: 84600, exitPrice: 85100, margin: 100, leverage: 80, entryFeePercent: 0.06, exitFeePercent: 0.06 }
@@ -40,6 +40,18 @@ describe('calculateTrade', () => {
     const exitPrice = calculateTargetExitPrice({ side, entryPrice: 84600, margin: 100, leverage: 80, entryFeePercent: 0.06, exitFeePercent: 0.06, desiredNetProfit: target })
     const result = calculateTrade({ ...base, side, entryPrice: 84600, exitPrice })
     expect(result.netPnl).toBeCloseTo(target, 10)
+  })
+
+  it.each(['LONG', 'SHORT'] as const)('solves %s net break-even after entry and exit fees', side => {
+    const input = { side, entryPrice: 84600, margin: 100, leverage: 80, entryFeePercent: 0.06, exitFeePercent: 0.06 }
+    const exitPrice = calculateBreakEvenExitPrice(input)
+    const result = calculateTrade({ ...base, ...input, exitPrice })
+    expect(exitPrice).toBeGreaterThan(0)
+    expect(result.netPnl).toBeCloseTo(0, 9)
+  })
+
+  it('break-even equals entry price when fees are zero', () => {
+    expect(calculateBreakEvenExitPrice({ ...base, entryFeePercent: 0, exitFeePercent: 0 })).toBe(base.entryPrice)
   })
 
   it('rejects invalid inputs', () => {

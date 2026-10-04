@@ -1,6 +1,6 @@
 # Requerimientos y estado
 
-Última actualización: 2026-10-03
+Última actualización: 2026-10-04
 
 ## Listo
 
@@ -20,8 +20,11 @@
 ## Pendiente de configuración de despliegue
 
 - [x] Tests y build ejecutados dentro de Docker.
-- [ ] Confirmar el nombre del repositorio GitHub si no es `pages-test`; actualizar la base de Pages en `vite.config.ts`.
-- [ ] Habilitar GitHub Actions como fuente de GitHub Pages en los ajustes del repositorio.
+- [x] Configurar `pages-test` como base de GitHub Pages en `vite.config.ts`.
+- [x] Habilitar GitHub Actions como fuente de GitHub Pages en los ajustes del repositorio.
+- [x] Despliegue automático confirmado en `https://reydirrz.github.io/pages-test/`.
+- [x] Mostrar precio de break-even neto con fees incluidos y distancia favorable del exit actual.
+- [x] Tests LONG y SHORT validan que el precio break-even retorna net PnL de cero.
 
 ## Decisiones y correcciones matemáticas
 

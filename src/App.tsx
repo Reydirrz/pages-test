@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { calculateTargetExitPrice, calculateTrade, validateTradeInput } from './lib/futuresCalculator'
+import { calculateBreakEvenExitPrice, calculateTargetExitPrice, calculateTrade, validateTradeInput } from './lib/futuresCalculator'
 import type { TradeInput } from './types/trading'
 
 const initial: TradeInput = { side: 'LONG', entryPrice: 84600, exitPrice: 85100, margin: 100, leverage: 80, entryFeePercent: 0.06, exitFeePercent: 0.06 }
@@ -12,6 +12,12 @@ function App() {
   const [feePreset, setFeePreset] = useState('custom')
   const errors = validateTradeInput(trade)
   const result = useMemo(() => errors.length ? null : calculateTrade(trade), [trade, errors.length])
+  const breakEven = useMemo(() => {
+    try {
+      return calculateBreakEvenExitPrice({ side: trade.side, entryPrice: trade.entryPrice, margin: trade.margin, leverage: trade.leverage, entryFeePercent: trade.entryFeePercent, exitFeePercent: trade.exitFeePercent })
+    } catch { return null }
+  }, [trade])
+  const breakEvenProgress = breakEven === null ? null : trade.side === 'LONG' ? trade.exitPrice - breakEven : breakEven - trade.exitPrice
   const target = useMemo(() => {
     try {
       return calculateTargetExitPrice({ side: trade.side, entryPrice: trade.entryPrice, margin: trade.margin, leverage: trade.leverage, entryFeePercent: trade.entryFeePercent, exitFeePercent: trade.exitFeePercent, desiredNetProfit: targetProfit })
@@ -56,6 +62,7 @@ function App() {
         {errors.length ? <div className="error-box"><strong>Check your inputs</strong>{errors.map(error => <p key={error}>{error}</p>)}</div> : result && <>
           <div className={`profit-card ${result.netPnl >= 0 ? 'positive' : 'negative'}`}><div className="profit-head"><span>NET PROFIT</span><span className="pill">{result.netPnl >= 0 ? 'PROFIT' : 'LOSS'}</span></div><strong>{usd(result.netPnl)} <small>USDT</small></strong><div className="profit-footer"><span>ROI ON MARGIN</span><b>{usd(result.roi)}%</b></div></div>
           <div className="movement"><div><span>PRICE MOVEMENT</span><strong className={result.favorableMovement ? 'good' : 'bad'}>{result.priceMovement > 0 ? '+' : ''}{price(result.priceMovement)} <small>USDT</small></strong></div><div><span>PRICE CHANGE</span><strong className={result.favorableMovement ? 'good' : 'bad'}>{result.priceMovementPercent > 0 ? '+' : ''}{result.priceMovementPercent.toFixed(3)}%</strong></div></div>
+          {breakEven !== null && breakEvenProgress !== null && <div className="break-even"><div><span>NET BREAK-EVEN EXIT</span><strong>{price(breakEven)} <small>USDT</small></strong></div><p>Fees included <b className={breakEvenProgress >= 0 ? 'good' : 'bad'}>{breakEvenProgress >= 0 ? `· ${price(Math.abs(breakEvenProgress))} past break-even` : `· needs ${price(Math.abs(breakEvenProgress))} more`}</b></p></div>}
           <div className="breakdown-title">POSITION BREAKDOWN <span>USDT</span></div>
           <Rows rows={[
             ['Position size', price(result.positionSize)], ['BTC size', `${result.btcSize.toFixed(8)} BTC`], ['Gross PnL', usd(result.grossPnl)], ['Entry fee', `-${price(result.entryFee)}`], ['Exit fee', `-${price(result.exitFee)}`], ['Total fees', `-${price(result.totalFees)}`],
