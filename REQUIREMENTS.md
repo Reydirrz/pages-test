@@ -29,3 +29,5 @@
 - SHORT: `net = positionSize + entryFee - btcSize * exit * (1 + exitFeeRate)`. El precio objetivo se despeja como `(positionSize + entryFee - desiredNetProfit) / (btcSize * (1 + exitFeeRate))`.
 - El SPEC no especifica el dominio de fees del solver. Para mantener un denominador LONG positivo se valida `exitFee < 100%`; se rechazan precios objetivo no positivos, que no representan una salida posible.
 - El cambio de precio se muestra como el movimiento real (Exit − Entry); la etiqueta favorable/desfavorable se determina además según el lado LONG/SHORT.
+- [x] `docker-compose.yml` para levantar el servidor local dentro de Docker.
+- [x] Servidor de desarrollo accesible en `http://localhost:5173/` mediante Docker Compose.
