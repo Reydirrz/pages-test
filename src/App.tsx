@@ -1,12 +1,14 @@
 import { useMemo, useState } from 'react'
 import { calculateBreakEvenExitPrice, calculateTargetExitPrice, calculateTrade, validateTradeInput } from './lib/futuresCalculator'
 import type { TradeInput } from './types/trading'
+import BitunixPanel from './components/BitunixPanel'
 
 const initial: TradeInput = { side: 'LONG', entryPrice: 84600, exitPrice: 85100, margin: 100, leverage: 80, entryFeePercent: 0.06, exitFeePercent: 0.06 }
 const usd = (value: number) => `${value < 0 ? '−' : value > 0 ? '+' : ''}${Math.abs(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 const price = (value: number) => value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
 function App() {
+  const [view, setView] = useState<'calculator' | 'bitunix'>('calculator')
   const [trade, setTrade] = useState<TradeInput>(initial)
   const [targetProfit, setTargetProfit] = useState(20)
   const [feePreset, setFeePreset] = useState('custom')
@@ -40,6 +42,8 @@ function App() {
 
   return <main className="shell">
     <header className="topbar"><div className="brand"><span className="brand-icon">↗</span><div><h1>Futures calculator</h1><p>BTCUSDT · PnL simulator</p></div></div><span className="live"><i /> LIVE CALCULATION</span></header>
+    <nav className="app-tabs" aria-label="Herramientas"><button className={view === 'calculator' ? 'active' : ''} onClick={() => setView('calculator')}>Calculadora</button><button className={view === 'bitunix' ? 'active' : ''} onClick={() => setView('bitunix')}>Bitunix en vivo <span>SOLO LECTURA</span></button></nav>
+    {view === 'bitunix' ? <BitunixPanel /> : <>
     <section className="hero"><div><p className="eyebrow">TRADE ANALYZER <span> / </span> USDT-M</p><h2>Know your numbers<br /><em>before the trade.</em></h2></div><p className="hero-note">Estimate your net outcome with position size and fees included.</p></section>
     <div className="workspace">
       <section className="panel inputs-panel">
@@ -72,6 +76,7 @@ function App() {
     </div>
     <section className="panel target-panel"><div className="target-intro"><span className="step">04</span><div><h3>Target profit</h3><p>Find the exit price for a desired net result.</p></div></div><div className="target-control"><label htmlFor="target">DESIRED NET PROFIT</label><div className="input-wrap"><input id="target" type="number" min="0" step="0.01" value={Number.isFinite(targetProfit) ? targetProfit : ''} onChange={e => setTargetProfit(e.target.value === '' ? Number.NaN : Number(e.target.value))} /><span className="suffix">USDT</span></div></div><div className="target-answer"><span>TARGET EXIT PRICE</span><strong>{target === null ? '—' : `${price(target)} USDT`}</strong></div></section>
     <footer><span>FUTURES PNL CALCULATOR</span><span>Calculations are estimates; exchange rules may vary.</span></footer>
+    </>}
   </main>
 }
 
