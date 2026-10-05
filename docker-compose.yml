@@ -6,8 +6,22 @@ services:
       - .:/app
       - node_modules:/app/node_modules
     ports:
-      - "5173:5173"
+      - "127.0.0.1:5173:5173"
+    depends_on:
+      - bitunix
     command: sh -c "npm ci && npm run dev -- --host 0.0.0.0"
     init: true
+  bitunix:
+    image: python:3.12-alpine
+    working_dir: /service
+    volumes:
+      - ./server:/service:ro
+    expose:
+      - "8765"
+    command: python bitunix_server.py
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp
 volumes:
   node_modules:

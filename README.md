@@ -1,6 +1,6 @@
 # Futures PnL Calculator
 
-App estática React + TypeScript + Vite para estimar PnL de futuros. Incluye la calculadora simuladora original y un panel de posiciones abiertas Bitunix en modo solo lectura.
+Calculadora React + TypeScript + Vite para estimar PnL de futuros, con panel de posiciones Bitunix de solo lectura. La interfaz se publica en GitHub Pages; el acceso a credenciales de Bitunix se habilita solo al ejecutar la app localmente con Docker.
 
 ## Requisitos
 
@@ -12,7 +12,9 @@ Docker. No es necesario instalar Node.js ni npm en el equipo.
 docker compose up
 ```
 
-Abre http://localhost:5173. Para detenerlo usa `Ctrl+C` o `docker compose down`.
+Abre http://localhost:5173. En la pestaña Bitunix introduce API key y secret de una key configurada con permiso de lectura. Para detenerlo usa `Ctrl+C` o `docker compose down`.
+
+El Compose inicia dos contenedores: la interfaz y un servicio Python pequeño que firma las consultas oficiales de Bitunix. El servicio solo es accesible dentro de la red de Docker; el único puerto publicado es la interfaz y queda ligado a `127.0.0.1`. La API key/secret se conservan en la memoria del servicio para sobrevivir a refrescos de página. No se guardan en localStorage ni en disco y se borran al desconectar o detener el contenedor.
 
 ## Tests y build
 
@@ -29,46 +31,21 @@ El workflow `.github/workflows/deploy.yml` corre tests, genera el build y public
 
 El build también se puede publicar manualmente en Cloudflare Pages, Vercel o Netlify usando `dist/`.
 
-## Bitunix en vivo: proxy requerido
+## Bitunix en vivo
 
-GitHub Pages es estático y no puede guardar un API secret. El panel por eso **no solicita ni almacena credenciales** y solo hace GET a un endpoint proxy configurado por ti. El proxy debe vivir en infraestructura tuya, firmar las llamadas Bitunix en el servidor y guardar la API key/secret como secrets privados. Usa una key restringida a lectura; no habilites trading ni retiros.
+En local, la interfaz envía la API key/secret al servicio Python del mismo Compose. Ese servicio valida y firma las peticiones a Bitunix y mantiene las credenciales solo en memoria. Usa una API key con permiso de lectura únicamente; no habilites trading ni retiros. Actualizar la página conserva la sesión mientras siga vivo el contenedor. El botón «Desconectar y borrar claves» borra la sesión; `docker compose down` también la elimina.
 
-Configura `VITE_BITUNIX_PROXY_URL` con la URL pública del endpoint en el entorno de build (por ejemplo, en `.env.local` durante desarrollo o en las variables de tu pipeline). La URL del proxy no es una credencial y queda embebida en el sitio; nunca pongas keys o secrets en variables `VITE_*`. `.env.local` está ignorado por Git. El panel también permite escribir temporalmente la URL mientras la página está abierta; no la persiste.
+GitHub Pages no pide ni recibe las credenciales. Bitunix requiere headers firmados (`api-key`, `nonce`, `timestamp`, `sign`) y su API no permite CORS desde el navegador; una página estática no puede saltarse esa regla. Por eso el panel alojado muestra cómo abrir la versión local. El workflow sigue publicando automáticamente la calculadora y el panel seguro en `main`.
 
-El endpoint GET debe responder JSON con este contrato:
+El servicio local llama a estos endpoints oficiales desde Docker y combina posiciones con mark price:
 
-```json
-{
-  "fetchedAt": "2026-10-04T12:00:00.000Z",
-  "realizedPnlMode": "gross",
-  "positions": [
-    {
-      "positionId": "position-id",
-      "symbol": "BTCUSDT",
-      "side": "LONG",
-      "qty": "0.01",
-      "avgOpenPrice": "60000",
-      "markPrice": "61000",
-      "unrealizedPNL": "1.50",
-      "realizedPNL": "0.00",
-      "fee": "0.10",
-      "funding": "-0.02",
-      "liqPrice": "0",
-      "marginRate": "0.01",
-      "leverage": 10
-    }
-  ]
-}
-```
+- `GET /api/v1/futures/position/get_pending_positions`
+- `GET /api/v1/futures/market/tickers?symbols=...`
 
-`realizedPnlMode` es `gross` por defecto y coincide con la documentación actual de Bitunix, que especifica que `realizedPNL` excluye comisiones y funding. En ese modo el estimador resta esos costes una vez. Si tu proxy verifica con el historial que `realizedPNL` ya es neto, debe devolver `"realizedPnlMode": "net"`; el estimador no volverá a restar fee/funding. El endpoint debe incluir el mark price de cada posición o `tickers: [{ "symbol": "BTCUSDT", "markPrice": "61000" }]` para que el adaptador lo asocie. Si no hay precio actual, la app falla cerrada y no calcula una cifra parcial.
+## Seguridad y cálculo
 
-Por posición se calcula:
+La firma se genera en el servicio Docker conforme a la fórmula oficial SHA256 doble de Bitunix. No se envían credenciales al bundle de Pages. El servicio no publica un puerto propio al host ni escribe claves en logs/disco. `docker compose down` detiene el servicio y borra su memoria.
 
-- Modo `gross`: `realizedPNL - fee - funding + unrealizedPNL - (abs(qty × markPrice) × closingFeePercent / 100)`.
-- Modo `net`: `realizedPNL + unrealizedPNL - feeDeCierreEstimado`.
+- `realizedPNL` excluye fee y funding según la documentación de Bitunix, así que el neto acumulado se calcula como `realizedPNL - fee - funding`.
+- Estimación al cerrar: `realized neto + unrealizedPNL - (abs(qty × markPrice) × closingFeePercent / 100)`.
 - El agregado superior es exactamente la suma de los netos individuales.
-
-El navegador consulta el proxy con GET cada 2 segundos por defecto (configurable a 5, 10 o 30) y sin cookies. Si el proxy requiere acceso, el panel admite un **token independiente del proxy** en un campo temporal: se conserva solo en memoria mientras la página está abierta, se envía como `Authorization: Bearer` únicamente a la URL configurada y se borra al desconectar. No es la API key de Bitunix. El proxy debe autenticar al usuario; CORS no es autenticación y por sí solo no protege datos de cuenta. Además, acepta CORS solo para `https://reydirrz.github.io` y el origen local de desarrollo que uses; permite GET/OPTIONS, `Accept` y `Authorization`, y no registra headers ni secretos. El servidor puede consultar `GET /api/v1/futures/position/get_pending_positions` y `GET /api/v1/futures/market/tickers?symbols=...` en `https://fapi.bitunix.com`, fusionando ticker `markPrice` con posiciones.
-
-Este repositorio contiene el frontend configurable, el contrato del proxy y tests con fixtures. No incluye ni despliega proxy, API key o secret; una conexión real requiere configurar un proxy propio.
