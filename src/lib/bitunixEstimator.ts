@@ -163,6 +163,14 @@ export function estimateAllPositions(positions: OpenPosition[], closingFeePercen
   return positions.map(position => estimatePositionNet(position, closingFeePercent))
 }
 
+/** Bitunix's displayed unrealized-PnL percent is PnL / initial position margin. */
+export function unrealizedPnlPercent(position: OpenPosition): number | null {
+  const leverage = position.leverage ?? 0
+  const initialMargin = Math.abs(position.qty) * position.avgOpenPrice / leverage
+  if (!Number.isFinite(initialMargin) || initialMargin <= 0 || !Number.isFinite(position.unrealizedPnl)) return null
+  return position.unrealizedPnl / initialMargin * 100
+}
+
 export function sumPositionEstimates(estimates: PositionEstimate[]): number {
   return estimates.reduce((total, estimate) => total + estimate.estimatedNetIfClosedNow, 0)
 }

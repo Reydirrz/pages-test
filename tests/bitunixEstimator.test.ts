@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { calculateLegacyLiveTotals, estimateAllPositions, estimatePositionNet, normalizeBitunixPayload, sumPositionEstimates } from '../src/lib/bitunixEstimator'
+import { calculateLegacyLiveTotals, estimateAllPositions, estimatePositionNet, normalizeBitunixPayload, sumPositionEstimates, unrealizedPnlPercent } from '../src/lib/bitunixEstimator'
 import { bitunixGrossFixture, bitunixNetFixture } from './fixtures/bitunixPositions'
 
 describe('Bitunix position normalization and close-now estimates', () => {
@@ -77,6 +77,15 @@ describe('Bitunix position normalization and close-now estimates', () => {
     expect(totals.unrealizedPnl).toBeCloseTo(2.1643, 10)
     expect(totals.estimatedClosePnl).toBeCloseTo(0.447784598, 9)
     expect(totals.perPosition[0].estimatedClosePnl).toBeCloseTo(0.447784598, 9)
+  })
+
+  it('matches Bitunix unrealized PnL percent using position margin and leverage', () => {
+    const { positions } = normalizeBitunixPayload({ positions: [{
+      symbol: 'BTCUSDT', side: 'BUY', qty: '0.0343', avgOpenPrice: '83291.3', markPrice: '83374.2',
+      unrealizedPNL: '2.84347', realizedPNL: '-1.71413495', leverage: 80,
+    }] })
+    expect(unrealizedPnlPercent(positions[0])?.toFixed(2)).toBe('7.96')
+    expect(unrealizedPnlPercent({ ...positions[0], leverage: null })).toBeNull()
   })
 
   it('accepts the original monitor position contract without translating its field names', () => {
