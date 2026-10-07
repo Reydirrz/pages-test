@@ -357,11 +357,13 @@ function PictureInPictureDashboard({ positions, totals, updatedAt }: {
   return <main className="pip-dashboard">
     <header><strong>BITUNIX <em>· EN VIVO</em></strong><span>ACTUALIZADO {clock(updatedAt)}</span></header>
     <section className="pip-total"><span>ESTIMADO NETO SI CIERRAS AHORA</span><strong className={totals.estimatedClosePnl >= 0 ? 'good' : 'bad'}>{money(totals.estimatedClosePnl)} <small>USDT</small></strong></section>
-    <div className="pip-summaries"><span>PNL NETO <b className={totals.netPnl >= 0 ? 'good' : 'bad'}>{money(totals.netPnl)}</b></span><span>FLOTANTE <b className={totals.unrealizedPnl >= 0 ? 'good' : 'bad'}>{money(totals.unrealizedPnl)}</b></span></div>
     <section className="pip-positions">{positions.length === 0 ? <p>No hay posiciones abiertas.</p> : positions.map(position => <article key={position.positionId}>
-      <div className="pip-position-heading"><strong><i className={position.side === 'LONG' ? 'long' : 'short'}>{position.side === 'LONG' ? 'BUY' : 'SELL'}</i> {position.symbol}</strong><span>{amount(position.qty)} · {position.leverage ? amount(position.leverage) : '—'}×</span></div>
-      <div className="pip-price">{marketPrice(position.avgOpenPrice)} → {marketPrice(position.markPrice)}</div>
-      <div className="pip-position-footer"><span>PNL FLOTANTE <b className={position.unrealizedPnl >= 0 ? 'good' : 'bad'}>{money(position.unrealizedPnl)}{unrealizedPercentLabel(position)}</b></span><span>BREAK-EVEN <b>{marketPrice(position.breakEvenPrice)}</b></span><span>MOV. BE <b className={position.breakEvenMovePercent <= 0 ? 'good' : 'bad'}>{position.breakEvenMovePercent > 0 ? '+' : ''}{position.breakEvenMovePercent.toFixed(2)}%</b></span></div>
+      <div className="pip-position-heading"><strong><i className={position.side === 'LONG' ? 'long' : 'short'}>{position.side === 'LONG' ? 'BUY' : 'SELL'}</i> {position.symbol}</strong></div>
+      <div className="pip-primary-metrics">
+        <div className="pip-roi"><span>ROI PNL FLOTANTE</span><strong className={position.unrealizedPnl >= 0 ? 'good' : 'bad'}>{unrealizedPercentValue(position) ?? '—'}</strong><small>{money(position.unrealizedPnl)} USDT</small></div>
+        <div className="pip-break-even"><span>BREAK-EVEN</span><strong>{marketPrice(position.breakEvenPrice)} <small>USDT</small></strong><small>MOV. BE <b className={position.breakEvenMovePercent <= 0 ? 'good' : 'bad'}>{position.breakEvenMovePercent > 0 ? '+' : ''}{position.breakEvenMovePercent.toFixed(2)}%</b></small></div>
+      </div>
+      <div className="pip-market-secondary">Marca {marketPrice(position.markPrice)} · entrada {marketPrice(position.avgOpenPrice)}</div>
     </article>)}</section>
   </main>
 }
@@ -441,8 +443,8 @@ function priceDifference(entry: number, mark: number) {
   return `${sign}${delta.toLocaleString('en-US', { maximumSignificantDigits: 8 })} USDT · ${sign}${percent.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`
 }
 
-function unrealizedPercentLabel(position: PositionEstimate) {
+function unrealizedPercentValue(position: PositionEstimate) {
   const percent = unrealizedPnlPercent(position)
-  if (percent === null) return ''
-  return ` (${percent > 0 ? '+' : ''}${percent.toFixed(2)}%)`
+  if (percent === null) return null
+  return `${percent > 0 ? '+' : ''}${percent.toFixed(2)}%`
 }
