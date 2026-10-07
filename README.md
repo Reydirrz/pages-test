@@ -35,6 +35,8 @@ El build también se puede publicar manualmente en Cloudflare Pages, Vercel o Ne
 
 En local, la interfaz envía la API key/secret al servicio Python del mismo Compose. Ese servicio valida y firma las peticiones a Bitunix y mantiene las credenciales solo en memoria. Actualizar la página conserva la sesión mientras siga vivo el contenedor.
 
+Conectado al monitor local, usa «Ventana flotante» para abrir Picture-in-Picture con el neto estimado, PnL y break-even de las posiciones. La ventana sigue actualizándose cada 2 segundos; requiere una versión reciente de Chrome o Edge.
+
 En GitHub Pages, el panel cifra las credenciales en el navegador con AES-GCM y una contraseña que tú eliges. Solo el texto cifrado queda en `localStorage`; tras refrescar, introduce la contraseña para desbloquear. La contraseña no se guarda. «Borrar credenciales cifradas» elimina la bóveda.
 
 **Límite de conexión de GitHub Pages:** Bitunix requiere los headers firmados `api-key`, `nonce`, `timestamp` y `sign`. Se verificó desde Docker que el preflight `OPTIONS` para `https://reydirrz.github.io` no devuelve permisos CORS para esos headers. El navegador, por tanto, bloquea la consulta y no envía la solicitud firmada. La bóveda cifra y conserva las claves, pero no puede quitar esta restricción del servidor de Bitunix. Para consultar la cuenta hoy, abre `http://localhost:5173` con Docker Compose, donde el helper local firma las solicitudes. El workflow sigue publicando la UI en `main`.

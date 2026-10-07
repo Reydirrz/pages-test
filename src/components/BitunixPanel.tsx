@@ -1,5 +1,6 @@
 import { memo, useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
+import { createRoot } from 'react-dom/client'
 import { fetchBitunixPositionsInBrowser } from '../lib/bitunixBrowserConnection'
 import { decryptCredentials, encryptCredentials } from '../lib/credentialVault'
 import { calculateLegacyLiveTotals, estimateAllPositions, normalizeBitunixPayload } from '../lib/bitunixEstimator'
@@ -33,6 +34,8 @@ export default function BitunixPanel() {
   const [proxyTimestamp, setProxyTimestamp] = useState<string | null>(null)
   const [latency, setLatency] = useState<number | null>(null)
   const [error, setError] = useState('')
+  const [pipError, setPipError] = useState('')
+  const [pipOpen, setPipOpen] = useState(false)
   const [refreshToken, setRefreshToken] = useState(0)
   const busy = useRef(false)
   const hasReceivedData = useRef(false)
@@ -40,6 +43,8 @@ export default function BitunixPanel() {
   const feeRate = closingFeePercent.trim() === '' ? Number.NaN : Number(closingFeePercent)
   feeRateRef.current = feeRate
   const feeValid = Number.isFinite(feeRate) && feeRate >= 0
+  const pipWindow = useRef<Window | null>(null)
+  const pipRoot = useRef<ReturnType<typeof createRoot> | null>(null)
   const positions = positionsRef.current
   const estimates = feeValid ? estimateAllPositions(positions, feeRate) : []
   const totals = feeValid ? calculateLegacyLiveTotals(positions, feeRate) : null
@@ -50,6 +55,7 @@ export default function BitunixPanel() {
   function receivePositions(next: OpenPosition[]) {
     const nextShape = next.map(position => position.positionId).join('\u0000')
     positionsRef.current = next
+    updatePip(next, feeRateRef.current)
     if (positionsShape.current !== nextShape) {
       positionsShape.current = nextShape
       setPositionVersion(version => version + 1)
@@ -57,6 +63,60 @@ export default function BitunixPanel() {
       patchLiveDashboard(next, feeRateRef.current)
     }
   }
+
+  function updatePip(nextPositions: OpenPosition[], nextFeeRate: number) {
+    if (!pipRoot.current || !Number.isFinite(nextFeeRate) || nextFeeRate < 0) return
+    pipRoot.current.render(<PictureInPictureDashboard
+      positions={estimateAllPositions(nextPositions, nextFeeRate)}
+      totals={calculateLegacyLiveTotals(nextPositions, nextFeeRate)}
+      updatedAt={Date.now()}
+    />)
+  }
+
+  async function togglePictureInPicture() {
+    if (pipWindow.current && !pipWindow.current.closed) {
+      pipWindow.current.close()
+      return
+    }
+
+    const pipApi = (window as Window & {
+      documentPictureInPicture?: { requestWindow: (options: { width: number; height: number }) => Promise<Window> }
+    }).documentPictureInPicture
+    if (!pipApi) {
+      setPipError('La ventana flotante requiere una versión reciente de Chrome o Edge.')
+      return
+    }
+
+    try {
+      setPipError('')
+      const pip = await pipApi.requestWindow({ width: 390, height: 300 })
+      pipWindow.current = pip
+      document.querySelectorAll('link[rel="stylesheet"], style').forEach(style => {
+        pip.document.head.appendChild(style.cloneNode(true))
+      })
+      pip.document.title = 'Bitunix · operación en vivo'
+      pip.document.body.classList.add('pip-window')
+      const root = createRoot(pip.document.body)
+      pipRoot.current = root
+      pip.addEventListener('pagehide', () => {
+        root.unmount()
+        if (pipWindow.current === pip) {
+          pipWindow.current = null
+          pipRoot.current = null
+          setPipOpen(false)
+        }
+      }, { once: true })
+      updatePip(positionsRef.current, feeRateRef.current)
+      setPipOpen(true)
+    } catch {
+      setPipError('No se pudo abrir la ventana flotante. Vuelve a intentarlo.')
+    }
+  }
+
+  useEffect(() => () => {
+    pipRoot.current?.unmount()
+    pipWindow.current?.close()
+  }, [])
 
   useEffect(() => {
     if (!isLocal) return
@@ -205,6 +265,7 @@ export default function BitunixPanel() {
   }
 
   async function disconnect() {
+    if (pipWindow.current && !pipWindow.current.closed) pipWindow.current.close()
     await fetch('/api/disconnect', { method: 'POST', cache: 'no-store' }).catch(() => undefined)
     setConnected(false)
     hasReceivedData.current = false
@@ -249,7 +310,8 @@ export default function BitunixPanel() {
         {!feeValid && <p className="inline-error">El fee debe ser un porcentaje válido no negativo.</p>}
       </form>}
       {connected && <section className="panel bitunix-controls connected-controls">
-        <div className="connect-actions"><button className="connect-button secondary" onClick={() => setRefreshToken(value => value + 1)}>↻ Actualizar ahora</button><button className="connect-button disconnect" onClick={disconnect}>Desconectar y borrar claves</button></div>
+        <div className="connect-actions"><button className="connect-button secondary" onClick={() => setRefreshToken(value => value + 1)}>↻ Actualizar ahora</button><button className="connect-button secondary" onClick={() => void togglePictureInPicture()}>{pipOpen ? 'Cerrar ventana flotante' : '↗ Ventana flotante'}</button><button className="connect-button disconnect" onClick={disconnect}>Desconectar y borrar claves</button></div>
+        {pipError && <p className="pip-error" role="status">{pipError}</p>}
         {!feeValid && <p className="inline-error">El fee debe ser un porcentaje válido no negativo.</p>}
         <div className="poll-meta"><span>ÚLTIMA CONSULTA <b data-live-meta="last-query">{clock(lastQuery)}</b></span><span>LATENCIA <b data-live-meta="latency">{latency === null ? '—' : `${latency} ms`}</b></span><span>DATOS DE BITUNIX <b data-live-meta="data-time">{proxyTimestamp ? new Date(proxyTimestamp).toLocaleTimeString() : '—'}</b></span><span>ACTUALIZACIÓN <b>2s</b></span></div>
       </section>}
@@ -260,7 +322,7 @@ export default function BitunixPanel() {
       <section className="aggregate-grid">
         <div className="aggregate-card"><div><span>PNL NETO DE POSICIONES</span></div><strong data-live-total="net" className={baseTotal >= 0 ? 'good' : 'bad'}>{money(baseTotal)} <small>USDT</small></strong></div>
         <div className="aggregate-card"><div><span>PNL FLOTANTE</span></div><strong data-live-total="unrealized" className={unrealizedTotal >= 0 ? 'good' : 'bad'}>{money(unrealizedTotal)} <small>USDT</small></strong></div>
-        <div className="aggregate-card close-summary"><div><span>ESTIMADO NETO SI CIERRAS AHORA</span><strong data-live-total="close" className={total === null ? '' : total >= 0 ? 'good' : 'bad'}>{total === null ? '—' : money(total)} <small>USDT</small></strong></div><label>Fee taker %<input aria-label="Fee taker de cierre" type="number" min="0" max="2" step="0.001" value={closingFeePercent} onChange={event => setClosingFeePercent(event.target.value)} /></label></div>
+        <div className="aggregate-card close-summary"><div><span>ESTIMADO NETO SI CIERRAS AHORA</span><strong data-live-total="close" className={total === null ? '' : total >= 0 ? 'good' : 'bad'}>{total === null ? '—' : money(total)} <small>USDT</small></strong></div><label>Fee taker %<input aria-label="Fee taker de cierre" type="number" min="0" max="2" step="0.001" value={closingFeePercent} onChange={event => { const nextFee = event.target.value; feeRateRef.current = nextFee.trim() === '' ? Number.NaN : Number(nextFee); setClosingFeePercent(nextFee); updatePip(positionsRef.current, feeRateRef.current) }} /></label></div>
       </section>
       {!feeValid ? <div className="error-box"><strong>Fee de cierre inválido</strong><p>Introduce un porcentaje válido no negativo.</p></div> : positions.length === 0 ? <div className="empty-positions"><span>—</span><strong>No hay posiciones abiertas</strong><p>Bitunix no devolvió posiciones activas.</p></div> : <section className="position-table panel">
         <div className="position-table-header"><span>Posición</span><span>Entrada → marca</span><span>Diferencia de precio<br /><small>Marca − entrada</small></span><span>Flotante</span><span>Realizado</span><span>Te quedaría al cerrar</span><span>Break-even</span><span>Movimiento BE</span></div>
@@ -286,6 +348,23 @@ const PositionRow = memo(function PositionRow({ position }: { position: Position
     <div className="position-cell"><strong data-live="break-even-move" className={position.breakEvenMovePercent <= 0 ? 'good' : 'bad'}>{position.breakEvenMovePercent > 0 ? '+' : ''}{position.breakEvenMovePercent.toFixed(2)}%</strong></div>
   </div>
 }, (previous, next) => previous.position === next.position)
+
+function PictureInPictureDashboard({ positions, totals, updatedAt }: {
+  positions: PositionEstimate[]
+  totals: ReturnType<typeof calculateLegacyLiveTotals>
+  updatedAt: number
+}) {
+  return <main className="pip-dashboard">
+    <header><strong>BITUNIX <em>· EN VIVO</em></strong><span>ACTUALIZADO {clock(updatedAt)}</span></header>
+    <section className="pip-total"><span>ESTIMADO NETO SI CIERRAS AHORA</span><strong className={totals.estimatedClosePnl >= 0 ? 'good' : 'bad'}>{money(totals.estimatedClosePnl)} <small>USDT</small></strong></section>
+    <div className="pip-summaries"><span>PNL NETO <b className={totals.netPnl >= 0 ? 'good' : 'bad'}>{money(totals.netPnl)}</b></span><span>FLOTANTE <b className={totals.unrealizedPnl >= 0 ? 'good' : 'bad'}>{money(totals.unrealizedPnl)}</b></span></div>
+    <section className="pip-positions">{positions.length === 0 ? <p>No hay posiciones abiertas.</p> : positions.map(position => <article key={position.positionId}>
+      <div className="pip-position-heading"><strong><i className={position.side === 'LONG' ? 'long' : 'short'}>{position.side === 'LONG' ? 'BUY' : 'SELL'}</i> {position.symbol}</strong><span>{amount(position.qty)} · {position.leverage ? amount(position.leverage) : '—'}×</span></div>
+      <div className="pip-price">{marketPrice(position.avgOpenPrice)} → {marketPrice(position.markPrice)}</div>
+      <div className="pip-position-footer"><span>FLOTANTE <b className={position.unrealizedPnl >= 0 ? 'good' : 'bad'}>{money(position.unrealizedPnl)}</b></span><span>BREAK-EVEN <b>{marketPrice(position.breakEvenPrice)}</b></span><span>MOV. BE <b className={position.breakEvenMovePercent <= 0 ? 'good' : 'bad'}>{position.breakEvenMovePercent > 0 ? '+' : ''}{position.breakEvenMovePercent.toFixed(2)}%</b></span></div>
+    </article>)}</section>
+  </main>
+}
 
 function patchMeta(name: string, value: string) {
   const element = document.querySelector<HTMLElement>(`[data-live-meta="${name}"]`)
