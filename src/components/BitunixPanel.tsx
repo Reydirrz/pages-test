@@ -96,10 +96,11 @@ export default function BitunixPanel() {
       })
       pip.document.title = 'Bitunix · operación en vivo'
       pip.document.body.classList.add('pip-window')
-      const root = createRoot(pip.document.body)
+      const mountPoint = pip.document.createElement('div')
+      pip.document.body.appendChild(mountPoint)
+      const root = createRoot(mountPoint)
       pipRoot.current = root
       pip.addEventListener('pagehide', () => {
-        root.unmount()
         if (pipWindow.current === pip) {
           pipWindow.current = null
           pipRoot.current = null
@@ -114,8 +115,10 @@ export default function BitunixPanel() {
   }
 
   useEffect(() => () => {
-    pipRoot.current?.unmount()
-    pipWindow.current?.close()
+    const pip = pipWindow.current
+    pipWindow.current = null
+    pipRoot.current = null
+    pip?.close()
   }, [])
 
   useEffect(() => {
@@ -355,15 +358,18 @@ function PictureInPictureDashboard({ positions, totals, updatedAt }: {
   updatedAt: number
 }) {
   return <main className="pip-dashboard">
-    <header><strong>BITUNIX <em>· EN VIVO</em></strong><span>ACTUALIZADO {clock(updatedAt)}</span></header>
-    <section className="pip-total"><span>ESTIMADO NETO SI CIERRAS AHORA</span><strong className={totals.estimatedClosePnl >= 0 ? 'good' : 'bad'}>{money(totals.estimatedClosePnl)} <small>USDT</small></strong></section>
+    <header><strong>BITUNIX <em>· {positions.length === 1 ? positions[0].symbol : 'EN VIVO'}</em></strong><span>{clock(updatedAt)}</span></header>
+    {positions.length > 1 && <section className="pip-total"><span>TOTAL SI CIERRAS TODO</span><strong className={totals.estimatedClosePnl >= 0 ? 'good' : 'bad'}>{money(totals.estimatedClosePnl)} <small>USDT</small></strong></section>}
     <section className="pip-positions">{positions.length === 0 ? <p>No hay posiciones abiertas.</p> : positions.map(position => <article key={position.positionId}>
       <div className="pip-position-heading"><strong><i className={position.side === 'LONG' ? 'long' : 'short'}>{position.side === 'LONG' ? 'BUY' : 'SELL'}</i> {position.symbol}</strong></div>
+      <section className={`pip-close-estimate ${position.estimatedNetIfClosedNow >= 0 ? 'positive' : 'negative'}`}>
+        <span>{positions.length === 1 ? 'TE QUEDA SI CIERRAS AHORA' : 'SI CIERRAS ESTA POSICIÓN'}</span>
+        <strong>{money(position.estimatedNetIfClosedNow)} <small>USDT</small></strong>
+      </section>
       <div className="pip-primary-metrics">
-        <div className="pip-roi"><span>ROI PNL FLOTANTE</span><strong className={position.unrealizedPnl >= 0 ? 'good' : 'bad'}>{unrealizedPercentValue(position) ?? '—'}</strong><small>{money(position.unrealizedPnl)} USDT</small></div>
-        <div className="pip-break-even"><span>BREAK-EVEN</span><strong>{marketPrice(position.breakEvenPrice)} <small>USDT</small></strong><small>MOV. BE <b className={position.breakEvenMovePercent <= 0 ? 'good' : 'bad'}>{position.breakEvenMovePercent > 0 ? '+' : ''}{position.breakEvenMovePercent.toFixed(2)}%</b></small></div>
+        <div className="pip-roi"><span>ROI DE LA POSICIÓN</span><strong className={position.unrealizedPnl >= 0 ? 'good' : 'bad'}>{unrealizedPercentValue(position) ?? '—'}</strong><small>PNL {money(position.unrealizedPnl)} USDT</small></div>
+        <div className="pip-break-even"><span>BREAK-EVEN</span><strong>{marketPrice(position.breakEvenPrice)} <small>USDT</small></strong><small>{breakEvenDistanceLabel(position)} <b className={position.breakEvenMovePercent <= 0 ? 'good' : 'bad'}>{Math.abs(position.breakEvenMovePercent).toFixed(2)}%</b></small></div>
       </div>
-      <div className="pip-market-secondary">Marca {marketPrice(position.markPrice)} · entrada {marketPrice(position.avgOpenPrice)}</div>
     </article>)}</section>
   </main>
 }
@@ -447,4 +453,9 @@ function unrealizedPercentValue(position: PositionEstimate) {
   const percent = unrealizedPnlPercent(position)
   if (percent === null) return null
   return `${percent > 0 ? '+' : ''}${percent.toFixed(2)}%`
+}
+
+function breakEvenDistanceLabel(position: PositionEstimate) {
+  if (Math.abs(position.breakEvenMovePercent) < 0.005) return 'EN BREAK-EVEN'
+  return position.breakEvenMovePercent > 0 ? 'FALTA PARA BE' : 'BE SUPERADO'
 }

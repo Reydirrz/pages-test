@@ -60,7 +60,7 @@
 - [x] Mostrar PnL y fee con cuatro decimales (máximo) para comparar contra el panel previo sin ocultar precisión útil.
 - El endpoint documentado de posiciones no incluye mark price; el helper lo busca en el ticker. Si falta, la app no muestra una cifra estimada.
 - La actualización consulta Bitunix cada 2 segundos desde el helper Docker local; la UI conserva la lista existente durante la consulta y solo modifica cifras que cambian.
-- [x] En el monitor Bitunix local, abrir una ventana Picture-in-Picture con PnL flotante y su ROI porcentual sobre el margen inicial de la posición, además de break-even y su porcentaje; actualizarla en cada consulta.
+- [x] En el monitor Bitunix local, abrir una ventana Picture-in-Picture que prioriza el estimado individual al cerrar, ROI del PnL flotante y break-even con distancia porcentual; ocultar métricas agregadas secundarias cuando hay una sola posición.
 - El panel no ejecuta órdenes. El modo Docker firma en el helper; Pages cifra su bóveda local con Web Crypto.
 - En Pages se almacena solo el ciphertext; en Docker las claves viven en RAM del helper y se borran al desconectar o parar el contenedor.
 - La API de Bitunix no permite CORS desde este origen de Pages para sus headers de firma. El helper local de Docker evita exponer credenciales al navegador y al bundle público.
