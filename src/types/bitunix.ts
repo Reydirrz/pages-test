@@ -1,22 +1,25 @@
-export type RealizedPnlMode = 'gross' | 'net'
 export type BitunixSide = 'LONG' | 'SHORT'
+export type BitunixSideInput = BitunixSide | 'BUY' | 'SELL'
 
 export interface BitunixPositionInput {
   positionId?: string | number
   symbol: string
-  side: BitunixSide
+  side: BitunixSideInput
   qty: string | number
-  avgOpenPrice: string | number
+  avgOpenPrice?: string | number
+  entry?: string | number
   markPrice?: string | number | null
+  mark?: string | number | null
   lastPrice?: string | number | null
-  unrealizedPNL: string | number
-  realizedPNL: string | number
+  unrealizedPNL?: string | number
+  unrealized?: string | number
+  realizedPNL?: string | number
+  realized?: string | number
   fee?: string | number | null
   funding?: string | number | null
   liqPrice?: string | number | null
   marginRate?: string | number | null
   leverage?: string | number | null
-  realizedPnlMode?: RealizedPnlMode
 }
 
 export interface BitunixTickerInput {
@@ -29,8 +32,6 @@ export interface BitunixTickerInput {
 export interface BitunixProxyPayload {
   positions?: BitunixPositionInput[]
   tickers?: BitunixTickerInput[]
-  /** `gross` matches Bitunix's documented realizedPNL; use `net` only when the proxy verifies costs are already included. */
-  realizedPnlMode?: RealizedPnlMode
   fetchedAt?: string
 }
 
@@ -48,7 +49,6 @@ export interface OpenPosition {
   liqPrice: number | null
   marginRate: number | null
   leverage: number | null
-  realizedPnlMode: RealizedPnlMode
 }
 
 export interface PositionEstimate extends OpenPosition {
@@ -56,4 +56,6 @@ export interface PositionEstimate extends OpenPosition {
   estimatedClosingFee: number
   accumulatedNetPnl: number
   estimatedNetIfClosedNow: number
+  breakEvenPrice: number
+  breakEvenMovePercent: number
 }

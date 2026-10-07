@@ -1,10 +1,10 @@
 import type {
   BitunixPositionInput,
+  BitunixSide,
   BitunixProxyPayload,
   BitunixTickerInput,
   OpenPosition,
   PositionEstimate,
-  RealizedPnlMode,
 } from '../types/bitunix'
 
 type UnknownRecord = Record<string, unknown>
@@ -28,10 +28,6 @@ function positivePrice(...values: unknown[]): number | null {
   return null
 }
 
-function validMode(value: unknown): value is RealizedPnlMode {
-  return value === 'gross' || value === 'net'
-}
-
 function normalizeTicker(value: unknown): BitunixTickerInput {
   const item = record(value)
   if (typeof item.symbol !== 'string' || !item.symbol) throw new RangeError('Bitunix proxy returned a ticker without a symbol.')
@@ -41,38 +37,43 @@ function normalizeTicker(value: unknown): BitunixTickerInput {
 function normalizePosition(
   value: unknown,
   tickers: Map<string, BitunixTickerInput>,
-  defaultMode: RealizedPnlMode,
   index: number,
 ): OpenPosition {
   const item = record(value) as unknown as BitunixPositionInput
   if (typeof item.symbol !== 'string' || !item.symbol.trim()) throw new RangeError(`Open position ${index + 1} has no symbol.`)
-  if (item.side !== 'LONG' && item.side !== 'SHORT') throw new RangeError(`Open position ${index + 1} has an unsupported side.`)
+  const side = normalizeSide(item.side, index)
 
   const ticker = tickers.get(item.symbol)
-  const markPrice = positivePrice(item.markPrice, item.lastPrice, ticker?.markPrice, ticker?.lastPrice, ticker?.last)
+  const legacyItem = record(value)
+  const markPrice = positivePrice(item.markPrice, legacyItem.mark, item.lastPrice, ticker?.markPrice, ticker?.lastPrice, ticker?.last)
   if (markPrice === null) throw new RangeError(`No mark price is available for ${item.symbol}; the position total cannot be estimated.`)
 
-  const qty = Math.abs(numberValue(item.qty, 'position quantity'))
-  const avgOpenPrice = numberValue(item.avgOpenPrice, 'average open price')
-  if (qty <= 0 || avgOpenPrice <= 0) throw new RangeError(`Open position ${index + 1} has a non-positive quantity or entry price.`)
+  const qty = numberValue(item.qty, 'position quantity')
+  const avgOpenPrice = numberValue(item.avgOpenPrice ?? legacyItem.entry, 'average open price')
+  if (qty === 0 || avgOpenPrice <= 0) throw new RangeError(`Open position ${index + 1} has a zero quantity or non-positive entry price.`)
 
-  const realizedPnlMode = validMode(item.realizedPnlMode) ? item.realizedPnlMode : defaultMode
   return {
     positionId: String(item.positionId ?? `${item.symbol}-${item.side}-${index}`),
     symbol: item.symbol,
-    side: item.side,
+    side,
     qty,
     avgOpenPrice,
     markPrice,
-    unrealizedPnl: numberValue(item.unrealizedPNL, 'unrealized PnL', 0),
-    realizedPnl: numberValue(item.realizedPNL, 'realized PnL', 0),
+    unrealizedPnl: numberValue(item.unrealizedPNL ?? legacyItem.unrealized, 'unrealized PnL', 0),
+    realizedPnl: numberValue(item.realizedPNL ?? legacyItem.realized, 'realized PnL', 0),
     fee: numberValue(item.fee, 'transaction fees', 0),
     funding: numberValue(item.funding, 'funding', 0),
     liqPrice: optionalNumber(item.liqPrice),
     marginRate: optionalNumber(item.marginRate),
     leverage: optionalNumber(item.leverage),
-    realizedPnlMode,
   }
+}
+
+function normalizeSide(value: unknown, index: number): BitunixSide {
+  const side = typeof value === 'string' ? value.trim().toUpperCase() : ''
+  if (side === 'LONG' || side === 'BUY') return 'LONG'
+  if (side === 'SHORT' || side === 'SELL') return 'SHORT'
+  throw new RangeError(`Open position ${index + 1} has an unsupported side.`)
 }
 
 function optionalNumber(value: unknown): number | null {
@@ -92,9 +93,33 @@ export function normalizeBitunixPayload(value: unknown): { positions: OpenPositi
 
   const rawTickers = Array.isArray(proxy.tickers) ? proxy.tickers : Array.isArray(data.tickers) ? data.tickers : []
   const tickers = new Map(rawTickers.map(normalizeTicker).map(ticker => [ticker.symbol, ticker]))
-  const defaultMode = validMode(proxy.realizedPnlMode) ? proxy.realizedPnlMode : 'gross'
-  const positions = rawPositions.map((item, index) => normalizePosition(item, tickers, defaultMode, index))
+  const positions = rawPositions.map((item, index) => normalizePosition(item, tickers, index))
   return { positions, fetchedAt: typeof proxy.fetchedAt === 'string' ? proxy.fetchedAt : null }
+}
+
+/** Direct port of `show()` in Trading/bitunix-live-net.py. Keep its arithmetic in one place. */
+export function calculateLegacyLiveTotals(positions: OpenPosition[], closingFeePercent: number) {
+  if (!Number.isFinite(closingFeePercent) || closingFeePercent < 0) {
+    throw new RangeError('Closing taker fee must be a non-negative percentage.')
+  }
+  const rate = closingFeePercent / 100
+  const unrealizedPnl = positions.reduce((sum, position) => sum + (Number(position.unrealizedPnl) || 0), 0)
+  const realizedPnl = positions.reduce((sum, position) => sum + (Number(position.realizedPnl) || 0), 0)
+  const funding = positions.reduce((sum, position) => sum + (Number(position.funding) || 0), 0)
+  const closingFees = positions.reduce((sum, position) => sum + position.qty * position.markPrice * rate, 0)
+  const netPnl = realizedPnl + unrealizedPnl + funding
+
+  return {
+    netPnl,
+    unrealizedPnl,
+    estimatedClosingFees: closingFees,
+    estimatedClosePnl: netPnl - closingFees,
+    perPosition: positions.map(position => ({
+      positionId: position.positionId,
+      estimatedClosePnl: position.realizedPnl + position.unrealizedPnl + position.funding
+        - position.qty * position.markPrice * rate,
+    })),
+  }
 }
 
 export function estimatePositionNet(position: OpenPosition, closingFeePercent: number): PositionEstimate {
@@ -103,16 +128,34 @@ export function estimatePositionNet(position: OpenPosition, closingFeePercent: n
   }
   const closingNotional = position.qty * position.markPrice
   const estimatedClosingFee = closingNotional * closingFeePercent / 100
-  const accumulatedNetPnl = position.realizedPnlMode === 'gross'
-    ? position.realizedPnl - position.fee - position.funding
-    : position.realizedPnl
+  const liveTotals = calculateLegacyLiveTotals([position], closingFeePercent)
+  const accumulatedNetPnl = position.realizedPnl + position.funding
+  // Solve accumulated net + directional price PnL - closing fee = 0.
+  const feeRate = closingFeePercent / 100
+  const absoluteQty = Math.abs(position.qty)
+  const breakEvenDenominator = position.side === 'LONG'
+    ? absoluteQty - position.qty * feeRate
+    : absoluteQty + position.qty * feeRate
+  const currentNetBeforeCloseFee = position.realizedPnl + position.unrealizedPnl + position.funding
+  const breakEvenPrice = position.side === 'LONG'
+    ? (absoluteQty * position.markPrice - currentNetBeforeCloseFee) / breakEvenDenominator
+    : (absoluteQty * position.markPrice + currentNetBeforeCloseFee) / breakEvenDenominator
+  const breakEvenMovePercent = (position.side === 'LONG'
+    ? breakEvenPrice - position.markPrice
+    : position.markPrice - breakEvenPrice) / position.markPrice * 100
+
+  if (!Number.isFinite(breakEvenPrice) || breakEvenPrice <= 0) {
+    throw new RangeError('A positive break-even price cannot be calculated for this position and closing fee.')
+  }
 
   return {
     ...position,
     closingNotional,
     estimatedClosingFee,
     accumulatedNetPnl,
-    estimatedNetIfClosedNow: accumulatedNetPnl + position.unrealizedPnl - estimatedClosingFee,
+    estimatedNetIfClosedNow: liveTotals.perPosition[0].estimatedClosePnl,
+    breakEvenPrice,
+    breakEvenMovePercent,
   }
 }
 

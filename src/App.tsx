@@ -40,7 +40,7 @@ function App() {
     }
   }
 
-  return <main className="shell">
+  return <main className={view === 'bitunix' ? 'shell bitunix-shell' : 'shell'}>
     <header className="topbar"><div className="brand"><span className="brand-icon">↗</span><div><h1>Futures calculator</h1><p>BTCUSDT · PnL simulator</p></div></div><span className="live"><i /> LIVE CALCULATION</span></header>
     <nav className="app-tabs" aria-label="Herramientas"><button className={view === 'calculator' ? 'active' : ''} onClick={() => setView('calculator')}>Calculadora</button><button className={view === 'bitunix' ? 'active' : ''} onClick={() => setView('bitunix')}>Bitunix en vivo <span>SOLO LECTURA</span></button></nav>
     {view === 'bitunix' ? <BitunixPanel /> : <>

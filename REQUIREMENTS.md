@@ -27,10 +27,15 @@
 - [x] Tests LONG y SHORT validan que el precio break-even retorna net PnL de cero.
 - [x] Navegación entre la calculadora original y un panel independiente «Bitunix en vivo».
 - [x] Formulario de API key/secret solo en localhost; las claves viven en memoria del servicio Docker, persisten al refrescar y se borran al desconectar o detener el contenedor.
+- [x] En GitHub Pages, bóveda local cifrada AES-GCM-256 con PBKDF2-SHA-256; la contraseña no se almacena y permite conservar el texto cifrado entre refrescos.
 - [x] Servicio de firma Bitunix aislado en la red interna Docker; solo la UI se publica en loopback `127.0.0.1`.
 - [x] Estimación neta por posición y total agregado a partir de posiciones normalizadas, mark price y fee de cierre editable.
-- [x] GitHub Pages no solicita ni recibe claves; muestra cómo iniciar la versión local con Docker.
-- [x] Tests offline de normalización, posiciones vacías, error sin mark price, fee de cierre, aggregate, funding y variantes de realized PnL gross/net.
+- [x] GitHub Pages pide credenciales y guarda únicamente el texto cifrado en el navegador; se informa claramente que el preflight CORS de Bitunix bloquea la consulta firmada directa.
+- [x] Tests offline de normalización, posiciones vacías, error sin mark price, fee de cierre, aggregate, funding y equivalencia con la fórmula del monitor original.
+
+## Pendiente para conexión desde GitHub Pages
+
+- [ ] Bitunix debe permitir CORS desde `https://reydirrz.github.io` para `api-key`, `nonce`, `timestamp`, `sign` y `content-type`, o debe existir un intermediario firmado. El preflight verificado actualmente bloquea la solicitud antes de enviar las credenciales.
 
 ## Pendiente para validar contra una cuenta real
 
@@ -47,9 +52,14 @@
 
 ## Convención Bitunix y límites
 
-- La documentación oficial indica que `realizedPNL` excluye transaction fee y funding; el helper calcula `realizedPNL - fee - funding` antes de sumar unrealized PnL y restar el fee de cierre.
+- [x] Replicar la convención ya validada por el monitor `Trading/bitunix-live-net.py`: neto vivo = `realizedPNL + unrealizedPNL + funding`; no volver a restar `fee` histórica cuando Bitunix ya la refleja en el PnL realizado.
+- [x] Mostrar PnL neto total, PnL flotante total y neto estimado al cerrar, con fórmula consistente por fila.
+- [x] Conservar nodos de posición entre consultas; no actualizar el estado de posiciones si los valores recibidos no cambiaron.
+- [x] Portar el refresco del original: actualizar nodos ya montados y solo pedir a React reconstruir la lista si cambian los IDs de posiciones; conservar los datos durante errores de red transitorios.
+- [x] Organizar el helper para revisar de un vistazo: tres totales en una fila y posiciones en filas compactas con diferencia de precio y break-even.
+- [x] Mostrar PnL y fee con cuatro decimales (máximo) para comparar contra el panel previo sin ocultar precisión útil.
 - El endpoint documentado de posiciones no incluye mark price; el helper lo busca en el ticker. Si falta, la app no muestra una cifra estimada.
-- La actualización consulta Bitunix cada 2 segundos desde el helper Docker local.
-- El panel no ejecuta órdenes ni firma requests en frontend. Pages muestra instrucciones para usar Docker localmente; el modo local consulta en solo lectura.
-- Las claves nunca se guardan en localStorage, cookies, logs o disco. Se conservan en RAM del helper para sobrevivir a refrescos y se borran al desconectar o parar el contenedor.
+- La actualización consulta Bitunix cada 2 segundos desde el helper Docker local; la UI conserva la lista existente durante la consulta y solo modifica cifras que cambian.
+- El panel no ejecuta órdenes. El modo Docker firma en el helper; Pages cifra su bóveda local con Web Crypto.
+- En Pages se almacena solo el ciphertext; en Docker las claves viven en RAM del helper y se borran al desconectar o parar el contenedor.
 - La API de Bitunix no permite CORS desde este origen de Pages para sus headers de firma. El helper local de Docker evita exponer credenciales al navegador y al bundle público.

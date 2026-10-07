@@ -65,7 +65,6 @@ def _positions_with_credentials(api_key: str, api_secret: str) -> dict:
     return {
         "positions": raw_positions,
         "tickers": tickers,
-        "realizedPnlMode": "gross",
         "fetchedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
 

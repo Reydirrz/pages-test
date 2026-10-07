@@ -1,21 +1,33 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
-import { estimateAllPositions, normalizeBitunixPayload, sumPositionEstimates } from '../lib/bitunixEstimator'
-import type { PositionEstimate } from '../types/bitunix'
+import { fetchBitunixPositionsInBrowser } from '../lib/bitunixBrowserConnection'
+import { decryptCredentials, encryptCredentials } from '../lib/credentialVault'
+import { calculateLegacyLiveTotals, estimateAllPositions, normalizeBitunixPayload } from '../lib/bitunixEstimator'
+import type { BitunixCredentials } from '../lib/credentialVault'
+import type { OpenPosition, PositionEstimate } from '../types/bitunix'
 
 type ConnectionState = 'idle' | 'loading' | 'connected' | 'error'
 const isLocal = typeof window !== 'undefined' && ['localhost', '127.0.0.1'].includes(window.location.hostname)
-const money = (value: number) => `${value < 0 ? '−' : value > 0 ? '+' : ''}${Math.abs(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+const VAULT_KEY = 'bitunix-credential-vault-v1'
+function hasCredentialVault() {
+  try { return Boolean(window.localStorage.getItem(VAULT_KEY)) } catch { return false }
+}
+const money = (value: number) => `${value < 0 ? '−' : value > 0 ? '+' : ''}${Math.abs(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 4 })}`
 const amount = (value: number) => value.toLocaleString('en-US', { maximumFractionDigits: 8 })
-const marketPrice = (value: number) => value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 8 })
+const marketPrice = (value: number) => value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 4 })
 const clock = (value: number | null) => value === null ? '—' : new Date(value).toLocaleTimeString()
 
 export default function BitunixPanel() {
   const [connected, setConnected] = useState(false)
   const [apiKey, setApiKey] = useState('')
   const [apiSecret, setApiSecret] = useState('')
+  const [vaultPassword, setVaultPassword] = useState('')
+  const [vaultAvailable, setVaultAvailable] = useState(() => !isLocal && hasCredentialVault())
+  const [unlockedCredentials, setUnlockedCredentials] = useState<BitunixCredentials | null>(null)
   const [state, setState] = useState<ConnectionState>('idle')
-  const [positions, setPositions] = useState<ReturnType<typeof normalizeBitunixPayload>['positions']>([])
+  const [, setPositionVersion] = useState(0)
+  const positionsRef = useRef<OpenPosition[]>([])
+  const positionsShape = useRef('')
   const [closingFeePercent, setClosingFeePercent] = useState('0.060')
   const [lastQuery, setLastQuery] = useState<number | null>(null)
   const [proxyTimestamp, setProxyTimestamp] = useState<string | null>(null)
@@ -23,10 +35,28 @@ export default function BitunixPanel() {
   const [error, setError] = useState('')
   const [refreshToken, setRefreshToken] = useState(0)
   const busy = useRef(false)
+  const hasReceivedData = useRef(false)
+  const feeRateRef = useRef(Number(closingFeePercent))
   const feeRate = closingFeePercent.trim() === '' ? Number.NaN : Number(closingFeePercent)
+  feeRateRef.current = feeRate
   const feeValid = Number.isFinite(feeRate) && feeRate >= 0
-  const estimates = useMemo(() => feeValid ? estimateAllPositions(positions, feeRate) : [], [positions, feeRate, feeValid])
-  const total = feeValid ? sumPositionEstimates(estimates) : null
+  const positions = positionsRef.current
+  const estimates = feeValid ? estimateAllPositions(positions, feeRate) : []
+  const totals = feeValid ? calculateLegacyLiveTotals(positions, feeRate) : null
+  const total = totals?.estimatedClosePnl ?? null
+  const baseTotal = totals?.netPnl ?? 0
+  const unrealizedTotal = totals?.unrealizedPnl ?? 0
+
+  function receivePositions(next: OpenPosition[]) {
+    const nextShape = next.map(position => position.positionId).join('\u0000')
+    positionsRef.current = next
+    if (positionsShape.current !== nextShape) {
+      positionsShape.current = nextShape
+      setPositionVersion(version => version + 1)
+    } else {
+      patchLiveDashboard(next, feeRateRef.current)
+    }
+  }
 
   useEffect(() => {
     if (!isLocal) return
@@ -42,33 +72,45 @@ export default function BitunixPanel() {
     if (!connected || !isLocal) return
     let active = true
     let controller: AbortController | null = null
+    let timer = 0
     const load = async () => {
       if (busy.current) return
       busy.current = true
       controller = new AbortController()
       const started = performance.now()
-      if (lastQuery === null) setState('loading')
+      if (!hasReceivedData.current) setState('loading')
       try {
         const response = await fetch('/api/positions', { cache: 'no-store', signal: controller.signal })
         const body = await response.json()
         if (!response.ok) throw new Error(body.error || `Servicio local: HTTP ${response.status}.`)
         const payload = normalizeBitunixPayload(body)
         if (!active) return
-        setPositions(payload.positions)
-        setProxyTimestamp(payload.fetchedAt)
-        setLatency(Math.round(performance.now() - started))
-        setLastQuery(Date.now())
+        receivePositions(payload.positions)
+        hasReceivedData.current = true
+        const queryLatency = Math.round(performance.now() - started)
+        const queriedAt = Date.now()
+        if (isLocal) {
+          patchMeta('last-query', clock(queriedAt))
+          patchMeta('latency', `${queryLatency} ms`)
+          patchMeta('data-time', payload.fetchedAt ? new Date(payload.fetchedAt).toLocaleTimeString() : '—')
+        } else {
+          setProxyTimestamp(payload.fetchedAt)
+          setLatency(queryLatency)
+          setLastQuery(queriedAt)
+        }
         setError('')
-        setState('connected')
+        setState(current => current === 'connected' ? current : 'connected')
       } catch (cause) {
         if (!active || (cause instanceof DOMException && cause.name === 'AbortError')) return
         setError(cause instanceof Error ? cause.message : 'No se pudo consultar Bitunix.')
-        setState('error')
-      } finally { busy.current = false }
+        if (!hasReceivedData.current) setState('error')
+      } finally {
+        busy.current = false
+        if (active) timer = window.setTimeout(() => void load(), 2000)
+      }
     }
     void load()
-    const timer = window.setInterval(() => void load(), 2000)
-    return () => { active = false; window.clearInterval(timer); controller?.abort(); busy.current = false }
+    return () => { active = false; window.clearTimeout(timer); controller?.abort(); busy.current = false }
   }, [connected, refreshToken])
 
   async function connect(event: FormEvent<HTMLFormElement>) {
@@ -88,6 +130,7 @@ export default function BitunixPanel() {
       setApiKey('')
       setApiSecret('')
       setConnected(true)
+      hasReceivedData.current = false
       setLastQuery(null)
       setState('loading')
     } catch (cause) {
@@ -96,13 +139,81 @@ export default function BitunixPanel() {
     }
   }
 
+  async function saveUnlockAndTryPages(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setState('loading')
+    setError('')
+    try {
+      let credentials: BitunixCredentials
+      if (vaultAvailable) {
+        const vault = window.localStorage.getItem(VAULT_KEY)
+        if (!vault) throw new Error('No se encontró la bóveda cifrada en este navegador.')
+        credentials = await decryptCredentials(vault, vaultPassword)
+      } else {
+        credentials = { apiKey: apiKey.trim(), apiSecret: apiSecret.trim() }
+        const vault = await encryptCredentials(credentials, vaultPassword)
+        window.localStorage.setItem(VAULT_KEY, vault)
+        setVaultAvailable(true)
+        setApiKey('')
+        setApiSecret('')
+      }
+      setVaultPassword('')
+      setUnlockedCredentials(credentials)
+      const payload = normalizeBitunixPayload(await fetchBitunixPositionsInBrowser(credentials))
+      receivePositions(payload.positions)
+      setProxyTimestamp(payload.fetchedAt)
+      setLastQuery(Date.now())
+      setState('connected')
+    } catch (cause) {
+      setState('error')
+      setError(cause instanceof TypeError
+        ? 'Bitunix bloqueó la consulta directa desde GitHub Pages (CORS). Las claves quedaron cifradas en este navegador; el navegador no envió la consulta firmada.'
+        : cause instanceof Error ? cause.message : 'No se pudo conectar con Bitunix.')
+    }
+  }
+
+  async function retryPagesConnection() {
+    if (!unlockedCredentials) return
+    setState('loading')
+    setError('')
+    try {
+      const payload = normalizeBitunixPayload(await fetchBitunixPositionsInBrowser(unlockedCredentials))
+      receivePositions(payload.positions)
+      setProxyTimestamp(payload.fetchedAt)
+      setLastQuery(Date.now())
+      setState('connected')
+    } catch (cause) {
+      setState('error')
+      setError(cause instanceof TypeError
+        ? 'Bitunix bloqueó la consulta directa desde GitHub Pages (CORS). Las claves cifradas siguen en este navegador.'
+        : cause instanceof Error ? cause.message : 'No se pudo conectar con Bitunix.')
+    }
+  }
+
+  function erasePagesVault() {
+    window.localStorage.removeItem(VAULT_KEY)
+    setVaultAvailable(false)
+    setUnlockedCredentials(null)
+    setApiKey('')
+    setApiSecret('')
+    setVaultPassword('')
+    positionsRef.current = []
+    positionsShape.current = ''
+    setPositionVersion(version => version + 1)
+    setState('idle')
+    setError('')
+  }
+
   async function disconnect() {
     await fetch('/api/disconnect', { method: 'POST', cache: 'no-store' }).catch(() => undefined)
     setConnected(false)
+    hasReceivedData.current = false
     setApiKey('')
     setApiSecret('')
     setState('idle')
-    setPositions([])
+    positionsRef.current = []
+    positionsShape.current = ''
+    setPositionVersion(version => version + 1)
     setLastQuery(null)
     setProxyTimestamp(null)
     setLatency(null)
@@ -115,53 +226,138 @@ export default function BitunixPanel() {
       <div className={`connection-badge ${state}`}><i />{state === 'connected' ? 'CONECTADO' : state === 'loading' ? 'CONECTANDO' : state === 'error' ? 'ERROR' : 'SIN CONEXIÓN'}</div>
     </div>
 
-    <div className="security-note"><strong>Las claves se guardan solo en la memoria del servicio Docker local.</strong><span>No se guardan en el navegador ni se envían a GitHub Pages. Se borran al desconectar o al detener/reiniciar el contenedor. Usa una API key con permiso de lectura únicamente.</span></div>
+    <div className="security-note"><strong>{isLocal ? 'Las claves viven solo en la memoria del helper Docker.' : 'Las credenciales guardadas quedan cifradas en este navegador.'}</strong><span>{isLocal ? 'Se borran al desconectar o al parar el contenedor.' : 'Cifrado AES-GCM con una contraseña que solo tú conoces. La contraseña no se guarda; la necesitarás después de cada refresco.'} Usa una API key con permiso de lectura únicamente.</span></div>
 
-    {!isLocal ? <div className="panel local-only"><strong>Conexión Bitunix disponible en la app local</strong><p>Por seguridad, GitHub Pages no solicita ni recibe tus claves. Para conectar tu cuenta, inicia Docker en tu equipo y abre <code>http://localhost:5173</code>.</p><code>docker compose up</code></div> : <>
+    {!isLocal ? <>
+      <form className="panel bitunix-controls credential-form pages-credential-form" onSubmit={saveUnlockAndTryPages}>
+        {!vaultAvailable && <>
+          <label className="field"><span>BITUNIX API KEY</span><input aria-label="Bitunix API key" type="password" autoComplete="off" spellCheck={false} value={apiKey} onChange={event => setApiKey(event.target.value)} required /></label>
+          <label className="field"><span>BITUNIX API SECRET</span><input aria-label="Bitunix API secret" type="password" autoComplete="new-password" value={apiSecret} onChange={event => setApiSecret(event.target.value)} required /></label>
+        </>}
+        <label className="field"><span>{vaultAvailable ? 'CONTRASEÑA PARA DESBLOQUEAR' : 'CONTRASEÑA PARA CIFRAR'}</span><input aria-label="Contraseña de cifrado" type="password" autoComplete="new-password" minLength={vaultAvailable ? undefined : 12} value={vaultPassword} onChange={event => setVaultPassword(event.target.value)} required /></label>
+        <button className="connect-button" type="submit" disabled={state === 'loading'}>{vaultAvailable ? 'Desbloquear y probar' : 'Guardar cifradas y probar'}</button>
+        {!vaultAvailable && <small className="vault-help">Contraseña de 12 caracteres o más. Si la olvidas, tendrás que borrar la bóveda y guardar las claves otra vez.</small>}
+      </form>
+      <div className="error-box pages-cors-note"><strong>Conexión desde Pages bloqueada por Bitunix</strong><p>La bóveda sí se guarda cifrada. Al probar, el navegador bloquea la consulta firmada porque Bitunix no autoriza CORS para GitHub Pages.</p></div>
+      {vaultAvailable && <div className="vault-actions"><button className="connect-button disconnect" onClick={erasePagesVault}>Borrar credenciales cifradas</button></div>}
+    </> : <>
       {!connected && <form className="panel bitunix-controls credential-form" onSubmit={connect}>
         <label className="field"><span>API KEY · SOLO LECTURA</span><input aria-label="Bitunix API key" type="password" autoComplete="off" spellCheck={false} value={apiKey} onChange={event => setApiKey(event.target.value)} required /></label>
         <label className="field"><span>API SECRET</span><input aria-label="Bitunix API secret" type="password" autoComplete="new-password" value={apiSecret} onChange={event => setApiSecret(event.target.value)} required /></label>
-        <label className="field"><span>FEE TAKER DE CIERRE</span><div className="input-wrap"><input aria-label="Fee taker de cierre" type="number" min="0" step="0.001" value={closingFeePercent} onChange={event => setClosingFeePercent(event.target.value)} /><span className="suffix">%</span></div></label>
+        <label className="field"><span>FEE TAKER DE CIERRE</span><div className="input-wrap"><input aria-label="Fee taker de cierre" type="number" min="0" max="2" step="0.001" value={closingFeePercent} onChange={event => setClosingFeePercent(event.target.value)} /><span className="suffix">%</span></div></label>
         <button className="connect-button" type="submit" disabled={!feeValid || state === 'loading'}>Conectar en modo lectura</button>
         {!feeValid && <p className="inline-error">El fee debe ser un porcentaje válido no negativo.</p>}
       </form>}
       {connected && <section className="panel bitunix-controls connected-controls">
-        <div className="field"><span>FEE TAKER DE CIERRE</span><div className="input-wrap"><input aria-label="Fee taker de cierre" type="number" min="0" step="0.001" value={closingFeePercent} onChange={event => setClosingFeePercent(event.target.value)} /><span className="suffix">%</span></div></div>
         <div className="connect-actions"><button className="connect-button secondary" onClick={() => setRefreshToken(value => value + 1)}>↻ Actualizar ahora</button><button className="connect-button disconnect" onClick={disconnect}>Desconectar y borrar claves</button></div>
         {!feeValid && <p className="inline-error">El fee debe ser un porcentaje válido no negativo.</p>}
-        <div className="poll-meta"><span>ÚLTIMA CONSULTA <b>{clock(lastQuery)}</b></span><span>LATENCIA <b>{latency === null ? '—' : `${latency} ms`}</b></span><span>DATOS DE BITUNIX <b>{proxyTimestamp ? new Date(proxyTimestamp).toLocaleTimeString() : '—'}</b></span><span>ACTUALIZACIÓN <b>2s</b></span></div>
+        <div className="poll-meta"><span>ÚLTIMA CONSULTA <b data-live-meta="last-query">{clock(lastQuery)}</b></span><span>LATENCIA <b data-live-meta="latency">{latency === null ? '—' : `${latency} ms`}</b></span><span>DATOS DE BITUNIX <b data-live-meta="data-time">{proxyTimestamp ? new Date(proxyTimestamp).toLocaleTimeString() : '—'}</b></span><span>ACTUALIZACIÓN <b>2s</b></span></div>
       </section>}
     </>}
 
-    {error && isLocal && <div className="error-box bitunix-error"><strong>No se pudo actualizar</strong><p>{error}</p></div>}
-    {state === 'connected' && isLocal && <>
-      <section className="aggregate-card"><div><span>TOTAL NETO ESTIMADO SI CIERRAS TODAS</span><p>Suma de las estimaciones individuales.</p></div><strong className={total === null ? '' : total >= 0 ? 'good' : 'bad'}>{total === null ? '—' : money(total)} <small>USDT</small></strong></section>
-      {!feeValid ? <div className="error-box"><strong>Fee de cierre inválido</strong><p>Introduce un porcentaje válido no negativo.</p></div> : positions.length === 0 ? <div className="empty-positions"><span>—</span><strong>No hay posiciones abiertas</strong><p>Bitunix no devolvió posiciones activas.</p></div> : <div className="position-list">{estimates.map(position => <PositionCard key={position.positionId} position={position} />)}</div>}
+    {error && <div className="error-box bitunix-error"><strong>No se pudo actualizar</strong><p>{error}</p></div>}
+    {state === 'connected' && <>
+      <section className="aggregate-grid">
+        <div className="aggregate-card"><div><span>PNL NETO DE POSICIONES</span></div><strong data-live-total="net" className={baseTotal >= 0 ? 'good' : 'bad'}>{money(baseTotal)} <small>USDT</small></strong></div>
+        <div className="aggregate-card"><div><span>PNL FLOTANTE</span></div><strong data-live-total="unrealized" className={unrealizedTotal >= 0 ? 'good' : 'bad'}>{money(unrealizedTotal)} <small>USDT</small></strong></div>
+        <div className="aggregate-card close-summary"><div><span>ESTIMADO NETO SI CIERRAS AHORA</span><strong data-live-total="close" className={total === null ? '' : total >= 0 ? 'good' : 'bad'}>{total === null ? '—' : money(total)} <small>USDT</small></strong></div><label>Fee taker %<input aria-label="Fee taker de cierre" type="number" min="0" max="2" step="0.001" value={closingFeePercent} onChange={event => setClosingFeePercent(event.target.value)} /></label></div>
+      </section>
+      {!feeValid ? <div className="error-box"><strong>Fee de cierre inválido</strong><p>Introduce un porcentaje válido no negativo.</p></div> : positions.length === 0 ? <div className="empty-positions"><span>—</span><strong>No hay posiciones abiertas</strong><p>Bitunix no devolvió posiciones activas.</p></div> : <section className="position-table panel">
+        <div className="position-table-header"><span>Posición</span><span>Entrada → marca</span><span>Diferencia de precio<br /><small>Marca − entrada</small></span><span>Flotante</span><span>Realizado</span><span>Te quedaría al cerrar</span><span>Break-even</span><span>Movimiento BE</span></div>
+        <div className="position-list">{estimates.map(position => <PositionRow key={position.positionId} position={position} />)}</div>
+      </section>}
+      {!isLocal && <div className="connected-controls"><button className="connect-button secondary" onClick={() => void retryPagesConnection()}>↻ Actualizar ahora</button><button className="connect-button disconnect" onClick={erasePagesVault}>Desconectar y borrar claves</button><span>Consulta {clock(lastQuery)}</span></div>}
     </>}
     {isLocal && !connected && !error && <div className="empty-positions setup-empty"><span>◉</span><strong>Conecta tu cuenta para ver tus posiciones</strong><p>La API key se valida con Bitunix; no se guarda en el navegador.</p></div>}
     <p className="estimate-disclaimer">Estimación con mark price y fee de cierre editable. El resultado real puede variar por tarifa efectiva, funding posterior, slippage y precio de ejecución.</p>
   </section>
 }
 
-function PositionCard({ position }: { position: PositionEstimate }) {
-  return <article className="position-card panel">
-    <div className="position-card-head"><div><strong>{position.symbol}</strong><span className={`side-tag ${position.side.toLowerCase()}`}>{position.side}</span></div><span className="position-id">ID {position.positionId}</span></div>
-    <div className={`position-net ${position.estimatedNetIfClosedNow >= 0 ? 'positive' : 'negative'}`}><span>ESTIMADO NETO SI CIERRAS AHORA</span><strong>{money(position.estimatedNetIfClosedNow)} <small>USDT</small></strong></div>
-    <div className="position-metrics">
-      <Metric label="CANTIDAD" value={`${amount(position.qty)} ${position.symbol}`} />
-      <Metric label="PRECIO ENTRADA" value={marketPrice(position.avgOpenPrice)} />
-      <Metric label="MARK PRICE" value={marketPrice(position.markPrice)} />
-      <Metric label="PNL FLOTANTE" value={money(position.unrealizedPnl)} signed />
-      <Metric label="PNL REALIZADO" value={money(position.realizedPnl)} signed />
-      <Metric label="FEES ACUMULADOS" value={money(position.fee)} />
-      <Metric label="FUNDING ACUMULADO" value={money(position.funding)} signed />
-      <Metric label="FEE DE CIERRE ESTIMADO" value={`−${position.estimatedClosingFee.toFixed(2)}`} />
-    </div>
-    <div className="position-foot"><span>Nocional de cierre: {position.closingNotional.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT</span><span>Cálculo neto: realizado − fees − funding + flotante − fee de cierre</span></div>
-  </article>
+const PositionRow = memo(function PositionRow({ position }: { position: PositionEstimate }) {
+  const long = position.side === 'LONG'
+  return <div className="position-row" data-live-position={position.positionId}>
+    <div className="position-cell position-name"><strong><span data-live="side" className={`side-tag ${long ? 'long' : 'short'}`}>{long ? 'BUY' : 'SELL'}</span> <span data-live="symbol">{position.symbol}</span></strong><small><span data-live="qty">{amount(position.qty)}</span> · <span data-live="leverage">{position.leverage ? amount(position.leverage) : '—'}</span>×</small></div>
+    <div className="position-cell position-prices"><span data-live="entry">{marketPrice(position.avgOpenPrice)}</span> → <span data-live="mark">{marketPrice(position.markPrice)}</span></div>
+    <div className="position-cell position-difference"><strong data-live="price-diff">{priceDifference(position.avgOpenPrice, position.markPrice)}</strong></div>
+    <div className="position-cell"><strong data-live="unrealized" className={position.unrealizedPnl >= 0 ? 'good' : 'bad'}>{money(position.unrealizedPnl)}</strong></div>
+    <div className="position-cell"><strong data-live="realized" className={position.realizedPnl >= 0 ? 'good' : 'bad'}>{money(position.realizedPnl)}</strong></div>
+    <div className="position-cell"><strong data-live="close-pnl" className={position.estimatedNetIfClosedNow >= 0 ? 'good' : 'bad'}>{money(position.estimatedNetIfClosedNow)}</strong></div>
+    <div className="position-cell"><strong data-live="break-even">{marketPrice(position.breakEvenPrice)}</strong></div>
+    <div className="position-cell"><strong data-live="break-even-move" className={position.breakEvenMovePercent <= 0 ? 'good' : 'bad'}>{position.breakEvenMovePercent > 0 ? '+' : ''}{position.breakEvenMovePercent.toFixed(2)}%</strong></div>
+  </div>
+}, (previous, next) => previous.position === next.position)
+
+function patchMeta(name: string, value: string) {
+  const element = document.querySelector<HTMLElement>(`[data-live-meta="${name}"]`)
+  if (element && element.textContent !== value) element.textContent = value
 }
 
-function Metric({ label, value, signed = false }: { label: string; value: string; signed?: boolean }) {
-  const negative = value.startsWith('−')
-  return <div className="position-metric"><span>{label}</span><strong className={signed ? negative ? 'bad' : 'good' : ''}>{value}</strong></div>
+function patchLiveDashboard(positions: OpenPosition[], closingFeePercent: number) {
+  if (typeof document === 'undefined' || !Number.isFinite(closingFeePercent) || closingFeePercent < 0) return
+  const estimates = estimateAllPositions(positions, closingFeePercent)
+  const totals = calculateLegacyLiveTotals(positions, closingFeePercent)
+  patchTotal('net', totals.netPnl)
+  patchTotal('unrealized', totals.unrealizedPnl)
+  patchTotal('close', totals.estimatedClosePnl)
+
+  const estimatesById = new Map(estimates.map(estimate => [estimate.positionId, estimate]))
+  document.querySelectorAll<HTMLElement>('[data-live-position]').forEach(card => {
+    const estimate = estimatesById.get(card.dataset.livePosition ?? '')
+    if (!estimate) return
+    const symbol = card.querySelector<HTMLElement>('[data-live="symbol"]')
+    if (symbol && symbol.textContent !== estimate.symbol) symbol.textContent = estimate.symbol
+    const sideTag = card.querySelector<HTMLElement>('[data-live="side"]')
+    if (sideTag) {
+      const sideText = estimate.side === 'LONG' ? 'BUY' : 'SELL'
+      if (sideTag.textContent !== sideText) sideTag.textContent = sideText
+      sideTag.classList.toggle('long', estimate.side === 'LONG')
+      sideTag.classList.toggle('short', estimate.side === 'SHORT')
+    }
+    setLiveText(card, 'close-pnl', money(estimate.estimatedNetIfClosedNow))
+    setLiveTone(card, 'close-pnl', estimate.estimatedNetIfClosedNow)
+    setLiveText(card, 'qty', amount(estimate.qty))
+    setLiveText(card, 'leverage', estimate.leverage ? amount(estimate.leverage) : '—')
+    setLiveText(card, 'entry', marketPrice(estimate.avgOpenPrice))
+    setLiveText(card, 'mark', marketPrice(estimate.markPrice))
+    setLiveText(card, 'price-diff', priceDifference(estimate.avgOpenPrice, estimate.markPrice))
+    setLiveText(card, 'break-even', `${marketPrice(estimate.breakEvenPrice)} USDT`)
+    const breakEvenMove = `${estimate.breakEvenMovePercent > 0 ? '+' : ''}${estimate.breakEvenMovePercent.toFixed(2)}%`
+    setLiveText(card, 'break-even-move', breakEvenMove)
+    setLiveTone(card, 'break-even-move', estimate.breakEvenMovePercent, true)
+    setLiveText(card, 'unrealized', money(estimate.unrealizedPnl))
+    setLiveTone(card, 'unrealized', estimate.unrealizedPnl)
+    setLiveText(card, 'realized', money(estimate.realizedPnl))
+    setLiveTone(card, 'realized', estimate.realizedPnl)
+  })
+}
+
+function patchTotal(name: string, value: number) {
+  const element = document.querySelector<HTMLElement>(`[data-live-total="${name}"]`)
+  if (!element) return
+  const amountText = money(value)
+  const amountNode = element.firstChild
+  if (amountNode && amountNode.textContent !== amountText) amountNode.textContent = amountText
+  setTone(element, value)
+}
+
+function setLiveText(card: HTMLElement, field: string, value: string) {
+  const element = card.querySelector<HTMLElement>(`[data-live="${field}"]`)
+  if (element && element.textContent !== value) element.textContent = value
+}
+
+function setLiveTone(card: HTMLElement, field: string, value: number, favorNegative = false) {
+  const element = card.querySelector<HTMLElement>(`[data-live="${field}"]`)
+  if (element) setTone(element, favorNegative ? -value : value)
+}
+
+function setTone(element: HTMLElement, value: number) {
+  element.classList.toggle('good', value >= 0)
+  element.classList.toggle('bad', value < 0)
+}
+
+function priceDifference(entry: number, mark: number) {
+  const delta = mark - entry
+  const sign = delta > 0 ? '+' : ''
+  const percent = delta / entry * 100
+  return `${sign}${delta.toLocaleString('en-US', { maximumSignificantDigits: 8 })} USDT · ${sign}${percent.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`
 }

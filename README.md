@@ -33,9 +33,11 @@ El build también se puede publicar manualmente en Cloudflare Pages, Vercel o Ne
 
 ## Bitunix en vivo
 
-En local, la interfaz envía la API key/secret al servicio Python del mismo Compose. Ese servicio valida y firma las peticiones a Bitunix y mantiene las credenciales solo en memoria. Usa una API key con permiso de lectura únicamente; no habilites trading ni retiros. Actualizar la página conserva la sesión mientras siga vivo el contenedor. El botón «Desconectar y borrar claves» borra la sesión; `docker compose down` también la elimina.
+En local, la interfaz envía la API key/secret al servicio Python del mismo Compose. Ese servicio valida y firma las peticiones a Bitunix y mantiene las credenciales solo en memoria. Actualizar la página conserva la sesión mientras siga vivo el contenedor.
 
-GitHub Pages no pide ni recibe las credenciales. Bitunix requiere headers firmados (`api-key`, `nonce`, `timestamp`, `sign`) y su API no permite CORS desde el navegador; una página estática no puede saltarse esa regla. Por eso el panel alojado muestra cómo abrir la versión local. El workflow sigue publicando automáticamente la calculadora y el panel seguro en `main`.
+En GitHub Pages, el panel cifra las credenciales en el navegador con AES-GCM y una contraseña que tú eliges. Solo el texto cifrado queda en `localStorage`; tras refrescar, introduce la contraseña para desbloquear. La contraseña no se guarda. «Borrar credenciales cifradas» elimina la bóveda.
+
+**Límite de conexión de GitHub Pages:** Bitunix requiere los headers firmados `api-key`, `nonce`, `timestamp` y `sign`. Se verificó desde Docker que el preflight `OPTIONS` para `https://reydirrz.github.io` no devuelve permisos CORS para esos headers. El navegador, por tanto, bloquea la consulta y no envía la solicitud firmada. La bóveda cifra y conserva las claves, pero no puede quitar esta restricción del servidor de Bitunix. Para consultar la cuenta hoy, abre `http://localhost:5173` con Docker Compose, donde el helper local firma las solicitudes. El workflow sigue publicando la UI en `main`.
 
 El servicio local llama a estos endpoints oficiales desde Docker y combina posiciones con mark price:
 
@@ -44,8 +46,10 @@ El servicio local llama a estos endpoints oficiales desde Docker y combina posic
 
 ## Seguridad y cálculo
 
-La firma se genera en el servicio Docker conforme a la fórmula oficial SHA256 doble de Bitunix. No se envían credenciales al bundle de Pages. El servicio no publica un puerto propio al host ni escribe claves en logs/disco. `docker compose down` detiene el servicio y borra su memoria.
+En Pages, el formato guardado es AES-GCM-256 con una clave derivada por PBKDF2-SHA-256 (600.000 iteraciones); la contraseña maestra no se persiste. Esto protege el archivo guardado en el navegador, pero no vuelve posible la llamada directa si Bitunix bloquea CORS. Usa una clave Bitunix restringida a lectura y borra la bóveda si compartes el dispositivo.
 
-- `realizedPNL` excluye fee y funding según la documentación de Bitunix, así que el neto acumulado se calcula como `realizedPNL - fee - funding`.
-- Estimación al cerrar: `realized neto + unrealizedPNL - (abs(qty × markPrice) × closingFeePercent / 100)`.
+En Docker, la firma se genera conforme a la fórmula oficial SHA256 doble de Bitunix. El servicio no publica un puerto propio al host ni escribe claves en logs/disco. `docker compose down` detiene el servicio y borra su memoria.
+
+- El monitor replica la fórmula que ya validaste en `Trading/bitunix-live-net.py`: `realizedPNL + unrealizedPNL + funding`; las fees históricas que Bitunix ya refleja en `realizedPNL` no se vuelven a restar.
+- Estimación al cerrar: exactamente como el original, `realizedPNL + unrealizedPNL + funding - (qty × markPrice × closingFeePercent / 100)`.
 - El agregado superior es exactamente la suma de los netos individuales.
