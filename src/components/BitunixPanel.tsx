@@ -89,7 +89,7 @@ export default function BitunixPanel() {
 
     try {
       setPipError('')
-      const pip = await pipApi.requestWindow({ width: 390, height: 300 })
+      const pip = await pipApi.requestWindow({ width: 430, height: 380 })
       pipWindow.current = pip
       document.querySelectorAll('link[rel="stylesheet"], style').forEach(style => {
         pip.document.head.appendChild(style.cloneNode(true))
@@ -359,17 +359,19 @@ function PictureInPictureDashboard({ positions, totals, updatedAt }: {
 }) {
   return <main className="pip-dashboard">
     <header><strong>BITUNIX <em>· {positions.length === 1 ? positions[0].symbol : 'EN VIVO'}</em></strong><span>{clock(updatedAt)}</span></header>
-    {positions.length > 1 && <section className="pip-total"><span>TOTAL SI CIERRAS TODO</span><strong className={totals.estimatedClosePnl >= 0 ? 'good' : 'bad'}>{money(totals.estimatedClosePnl)} <small>USDT</small></strong></section>}
+    {positions.length > 1 && <section className="pip-total"><span>NETO SI CIERRAS TODAS</span><strong className={totals.estimatedClosePnl >= 0 ? 'good' : 'bad'}>{money(totals.estimatedClosePnl)} <small>USDT</small></strong></section>}
     <section className="pip-positions">{positions.length === 0 ? <p>No hay posiciones abiertas.</p> : positions.map(position => <article key={position.positionId}>
-      <div className="pip-position-heading"><strong><i className={position.side === 'LONG' ? 'long' : 'short'}>{position.side === 'LONG' ? 'BUY' : 'SELL'}</i> {position.symbol}</strong></div>
+      <div className="pip-position-heading"><strong><i className={position.side === 'LONG' ? 'long' : 'short'}>{position.side === 'LONG' ? 'LONG' : 'SHORT'}</i> {position.symbol}</strong></div>
       <section className={`pip-close-estimate ${position.estimatedNetIfClosedNow >= 0 ? 'positive' : 'negative'}`}>
-        <span>{positions.length === 1 ? 'TE QUEDA SI CIERRAS AHORA' : 'SI CIERRAS ESTA POSICIÓN'}</span>
-        <strong>{money(position.estimatedNetIfClosedNow)} <small>USDT</small></strong>
+        <div><span>NETO ESTIMADO SI CIERRAS AHORA</span><strong>{money(position.estimatedNetIfClosedNow)} <small>USDT</small></strong></div>
+        <b className="pip-close-status">{closeResultLabel(position.estimatedNetIfClosedNow)}</b>
       </section>
       <div className="pip-primary-metrics">
-        <div className="pip-roi"><span>ROI DE LA POSICIÓN</span><strong className={position.unrealizedPnl >= 0 ? 'good' : 'bad'}>{unrealizedPercentValue(position) ?? '—'}</strong><small>PNL {money(position.unrealizedPnl)} USDT</small></div>
-        <div className="pip-break-even"><span>BREAK-EVEN</span><strong>{marketPrice(position.breakEvenPrice)} <small>USDT</small></strong><small>{breakEvenDistanceLabel(position)} <b className={position.breakEvenMovePercent <= 0 ? 'good' : 'bad'}>{Math.abs(position.breakEvenMovePercent).toFixed(2)}%</b></small></div>
+        <div className="pip-roi"><span>PNL FLOTANTE · ROI</span><strong className={position.unrealizedPnl >= 0 ? 'good' : 'bad'}>{unrealizedPercentValue(position) ?? '—'}</strong><small>{money(position.unrealizedPnl)} USDT</small></div>
+        <div className="pip-break-even"><span>BREAK-EVEN NETO</span><strong>{marketPrice(position.breakEvenPrice)} <small>USDT</small></strong><small className={position.breakEvenMovePercent <= 0 ? 'good' : 'bad'}>{breakEvenDistanceLabel(position)} {Math.abs(position.breakEvenMovePercent).toFixed(2)}%</small></div>
       </div>
+      <div className="pip-price-route"><div><span>ENTRADA</span><strong>{marketPrice(position.avgOpenPrice)}</strong></div><b className={priceMoveTone(position) ? 'good' : 'bad'}>{priceDifference(position.avgOpenPrice, position.markPrice)}</b><div><span>MARCA</span><strong>{marketPrice(position.markPrice)}</strong></div></div>
+      <div className="pip-risk-row"><span>MARGEN <b>{position.margin === null ? '—' : `${amount(position.margin)} USDT`}</b></span><span>APALANCAMIENTO <b>{position.leverage ? `${amount(position.leverage)}×` : '—'}</b></span><span>LIQUIDACIÓN <b className={position.liqPrice && position.liqPrice > 0 ? 'risk' : ''}>{position.liqPrice && position.liqPrice > 0 ? marketPrice(position.liqPrice) : 'Sin precio'}</b></span></div>
     </article>)}</section>
   </main>
 }
@@ -458,4 +460,15 @@ function unrealizedPercentValue(position: PositionEstimate) {
 function breakEvenDistanceLabel(position: PositionEstimate) {
   if (Math.abs(position.breakEvenMovePercent) < 0.005) return 'EN BREAK-EVEN'
   return position.breakEvenMovePercent > 0 ? 'FALTA PARA BE' : 'BE SUPERADO'
+}
+
+function closeResultLabel(pnl: number) {
+  if (Math.abs(pnl) < 0.00005) return 'EN BREAK-EVEN'
+  return pnl > 0 ? 'FUERA DE PÉRDIDA' : 'AÚN EN PÉRDIDA'
+}
+
+function priceMoveTone(position: PositionEstimate) {
+  return position.side === 'LONG'
+    ? position.markPrice >= position.avgOpenPrice
+    : position.markPrice <= position.avgOpenPrice
 }

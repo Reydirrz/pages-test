@@ -63,6 +63,7 @@ function normalizePosition(
     realizedPnl: numberValue(item.realizedPNL ?? legacyItem.realized, 'realized PnL', 0),
     fee: numberValue(item.fee, 'transaction fees', 0),
     funding: numberValue(item.funding, 'funding', 0),
+    margin: optionalNumber(item.margin),
     liqPrice: optionalNumber(item.liqPrice),
     marginRate: optionalNumber(item.marginRate),
     leverage: optionalNumber(item.leverage),

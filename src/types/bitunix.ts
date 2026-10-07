@@ -17,6 +17,7 @@ export interface BitunixPositionInput {
   realized?: string | number
   fee?: string | number | null
   funding?: string | number | null
+  margin?: string | number | null
   liqPrice?: string | number | null
   marginRate?: string | number | null
   leverage?: string | number | null
@@ -46,6 +47,7 @@ export interface OpenPosition {
   realizedPnl: number
   fee: number
   funding: number
+  margin: number | null
   liqPrice: number | null
   marginRate: number | null
   leverage: number | null

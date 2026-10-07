@@ -82,9 +82,11 @@ describe('Bitunix position normalization and close-now estimates', () => {
   it('matches Bitunix unrealized PnL percent using position margin and leverage', () => {
     const { positions } = normalizeBitunixPayload({ positions: [{
       symbol: 'BTCUSDT', side: 'BUY', qty: '0.0343', avgOpenPrice: '83291.3', markPrice: '83374.2',
-      unrealizedPNL: '2.84347', realizedPNL: '-1.71413495', leverage: 80,
+      unrealizedPNL: '2.84347', realizedPNL: '-1.71413495', leverage: 80, margin: '37.4424', liqPrice: '82470.2',
     }] })
     expect(unrealizedPnlPercent(positions[0])?.toFixed(2)).toBe('7.96')
+    expect(positions[0].margin).toBe(37.4424)
+    expect(positions[0].liqPrice).toBe(82470.2)
     expect(unrealizedPnlPercent({ ...positions[0], leverage: null })).toBeNull()
   })
 
